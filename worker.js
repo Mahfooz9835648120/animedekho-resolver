@@ -7,6 +7,7 @@ const ANIMESALT_API = "https://aniversee.vercel.app/api/animesalt";
 const ANIMEDEKHO_API = "https://animedekho-api.pages.dev/api/embed";
 const TOONAPI = "https://toonapi.apiplay.workers.dev/api/embed";
 const VIDSTREAM_HOST = "https://as-cdn21.top";
+const PROXY_WORKER  = "https://late-sunset-3efc.ammhfoo.workers.dev";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -57,8 +58,10 @@ export default {
         if (hash) {
           const m3u8 = await resolveVidstream(hash);
           if (m3u8) {
-            entry.m3u8 = m3u8;
-            results.m3u8s.push({ provider: `${name} · ${s.name}`, type: sType, m3u8 });
+            const proxied = proxyM3u8(m3u8, VIDSTREAM_HOST);
+            entry.m3u8 = proxied;
+            entry.rawM3u8 = m3u8;
+            results.m3u8s.push({ provider: `${name} · ${s.name}`, type: sType, m3u8: proxied });
           }
         }
 
@@ -95,7 +98,11 @@ export default {
           const entry = { provider: "AnimeDekho·Movie", name: s.name, type: "sub", embedUrl: s.url };
           if (hash) {
             const m3u8 = await resolveVidstream(hash);
-            if (m3u8) { entry.m3u8 = m3u8; results.m3u8s.push({ provider: entry.provider, type: "sub", m3u8 }); }
+            if (m3u8) {
+              const proxied = proxyM3u8(m3u8, VIDSTREAM_HOST);
+              entry.m3u8 = proxied; entry.rawM3u8 = m3u8;
+              results.m3u8s.push({ provider: entry.provider, type: "sub", m3u8: proxied });
+            }
           }
           results.servers.push(entry);
         }
@@ -150,6 +157,10 @@ function detectType(name, fallback) {
   if (n.includes("dub")) return "dub";
   if (n.includes("sub")) return "sub";
   return fallback;
+}
+
+function proxyM3u8(m3u8, referer) {
+  return `${PROXY_WORKER}/proxy?url=${encodeURIComponent(m3u8)}&referer=${encodeURIComponent(referer)}`;
 }
 
 function json(data, status = 200) {
