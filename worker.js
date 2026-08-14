@@ -11,10 +11,24 @@ const ANIMEDEKHO_API = 'https://animedekho-api.pages.dev/api/embed';
 const TOONAPI        = 'https://toonapi.apiplay.workers.dev/api/embed';
 const VIDSTREAM_HOST = 'https://as-cdn21.top';
 
+const ALLOWED_ORIGIN = 'https://aniversee.vercel.app';
+
+function corsHeaders(request) {
+  const origin = request ? (new URL(request.url).searchParams.get('_') || '') : '';
+  // Always return CORS for the allowed origin only
+  return {
+    'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
+    'Access-Control-Allow-Methods': 'GET,HEAD,OPTIONS',
+    'Access-Control-Allow-Headers': '*',
+    'Vary': 'Origin',
+  };
+}
+// Keep CORS as a shorthand for non-request contexts (jsonResp/errResp)
 const CORS = {
-  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
   'Access-Control-Allow-Methods': 'GET,HEAD,OPTIONS',
   'Access-Control-Allow-Headers': '*',
+  'Vary': 'Origin',
 };
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36';
 
@@ -50,9 +64,12 @@ async function handleVidstream(request) {
 
   if (!m3u8Url) return errResp('no m3u8 in getVideo response', 404);
 
-  return Response.redirect(
-    `${origin}/m3u8?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(referer)}`, 302
+  // Internal rewrite instead of redirect — redirect loses CORS headers
+  const m3u8Request = new Request(
+    `${origin}/m3u8?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(referer)}`,
+    request
   );
+  return handleM3u8(m3u8Request);
 }
 
 // ─── /m3u8?url=<playlist>&referer=<ref> ──────────────────────────────────────
