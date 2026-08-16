@@ -11,25 +11,22 @@ const ANIMEDEKHO_API = 'https://animedekho-api.pages.dev/api/embed';
 const TOONAPI        = 'https://toonapi.apiplay.workers.dev/api/embed';
 const VIDSTREAM_HOST = 'https://as-cdn21.top';
 
-const ALLOWED_ORIGIN = 'https://aniversee.vercel.app';
+// Development/public CORS mode.
+// This allows localhost, LAN IPs, Capacitor, Android WebView and normal HTTPS
+// pages to call the Worker. Restrict this to your CDN/app origins later.
+const ALLOWED_ORIGIN = '*';
 
-function corsHeaders(request) {
-  const origin = request ? (new URL(request.url).searchParams.get('_') || '') : '';
-  // Always return CORS for the allowed origin only
+function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
     'Access-Control-Allow-Methods': 'GET,HEAD,OPTIONS',
     'Access-Control-Allow-Headers': '*',
+    'Access-Control-Expose-Headers': '*',
     'Vary': 'Origin',
   };
 }
-// Keep CORS as a shorthand for non-request contexts (jsonResp/errResp)
-const CORS = {
-  'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
-  'Access-Control-Allow-Methods': 'GET,HEAD,OPTIONS',
-  'Access-Control-Allow-Headers': '*',
-  'Vary': 'Origin',
-};
+
+const CORS = corsHeaders();
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36';
 
 // ─── entry point ─────────────────────────────────────────────────────────────
@@ -45,7 +42,6 @@ async function handleRequest(request) {
 }
 
 // ─── /vidstream?hash=<hash> ───────────────────────────────────────────────────
-// POST getVideo from CF IP → signed m3u8 → redirect to /m3u8 for recursive rewrite
 async function handleVidstream(request) {
   const { searchParams, origin } = new URL(request.url);
   const hash = searchParams.get('hash');
@@ -64,7 +60,6 @@ async function handleVidstream(request) {
 
   if (!m3u8Url) return errResp('no m3u8 in getVideo response', 404);
 
-  // Internal rewrite instead of redirect — redirect loses CORS headers
   const m3u8Request = new Request(
     `${origin}/m3u8?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent(referer)}`,
     request
@@ -73,7 +68,6 @@ async function handleVidstream(request) {
 }
 
 // ─── /m3u8?url=<playlist>&referer=<ref> ──────────────────────────────────────
-// Fetch m3u8 from CF IP, rewrite ALL URIs (segments + child playlists + audio tracks)
 async function handleM3u8(request) {
   const { searchParams, origin } = new URL(request.url);
   const raw     = searchParams.get('url');
@@ -94,19 +88,16 @@ async function handleM3u8(request) {
     const t = line.trim();
     if (!t) return line;
 
-    // init segment
     if (t.startsWith('#EXT-X-MAP:'))
       return t.replace(/URI="([^"]+)"/, (_, uri) =>
         `URI="${mkProxy(origin, absUrl(url, uri), referer)}"`);
 
-    // audio/subtitle track — child playlist, rewrite recursively
     if (t.startsWith('#EXT-X-MEDIA:') && t.includes('URI="'))
       return t.replace(/URI="([^"]+)"/, (_, uri) =>
         `URI="${mkM3u8(origin, absUrl(url, uri), referer)}"`);
 
     if (t.startsWith('#')) return line;
 
-    // segment or child playlist
     const abs = absUrl(url, t);
     return abs.includes('.m3u8') ? mkM3u8(origin, abs, referer) : mkProxy(origin, abs, referer);
   }).join('\n');
@@ -161,7 +152,6 @@ async function handleResolve(request) {
 
   const results = { slug, servers: [], m3u8s: [], downloads: [] };
 
-  // AnimeDekho + ToonAPI in parallel
   const [dekho, toon] = await Promise.all([
     fetchJSON(`${ANIMEDEKHO_API}/${encodeURIComponent(slug)}`),
     fetchJSON(`${TOONAPI}/${encodeURIComponent(slug)}`),
@@ -178,7 +168,6 @@ async function handleResolve(request) {
       const entry = { provider: name, name: s.name, type: sType, embedUrl: s.url };
       const hash = extractHash(s.url);
       if (hash) {
-        // point to /vidstream on this same worker
         entry.m3u8 = `${origin}/vidstream?hash=${hash}`;
         results.m3u8s.push({ provider: `${name} · ${s.name}`, type: sType, m3u8: entry.m3u8 });
       }
@@ -189,7 +178,6 @@ async function handleResolve(request) {
     }
   }));
 
-  // AnimeSalt
   if (anilistId && saltId && ep) {
     try {
       const d = await fetchJSON(`${ANIMESALT_API}?anilistId=${anilistId}&ep=${ep}&season=${season ?? ''}&saltId=${encodeURIComponent(saltId)}`);
@@ -199,14 +187,16 @@ async function handleResolve(request) {
     } catch (_) {}
   }
 
-  // Movie fallback
   if (isMovie && saltId && saltId !== slug) {
     const d = await fetchJSON(`${ANIMEDEKHO_API}/${encodeURIComponent(saltId)}`);
     for (const s of (d?.servers || [])) {
       if (!s?.url) continue;
       const hash = extractHash(s.url);
       const entry = { provider: 'AnimeDekho·Movie', name: s.name, type: 'sub', embedUrl: s.url };
-      if (hash) { entry.m3u8 = `${origin}/vidstream?hash=${hash}`; results.m3u8s.push({ provider: entry.provider, type: 'sub', m3u8: entry.m3u8 }); }
+      if (hash) {
+        entry.m3u8 = `${origin}/vidstream?hash=${hash}`;
+        results.m3u8s.push({ provider: entry.provider, type: 'sub', m3u8: entry.m3u8 });
+      }
       results.servers.push(entry);
     }
   }
@@ -232,6 +222,9 @@ async function fetchJSON(url) {
 }
 
 function jsonResp(data, status) {
-  return new Response(JSON.stringify(data, null, 2), { status: status||200, headers: { ...CORS, 'Content-Type': 'application/json' } });
+  return new Response(JSON.stringify(data, null, 2), {
+    status: status||200,
+    headers: { ...CORS, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
+  });
 }
 function errResp(msg, status) { return jsonResp({ error: msg }, status||400); }
