@@ -1,0 +1,4 @@
+name = "anikoto-discovery"
+main = "anikoto-worker.js"
+compatibility_date = "2026-08-17"
+workers_dev = true
